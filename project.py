@@ -1,4 +1,5 @@
 import subprocess
+import shutil
 from utils import *
 
 REQUIRED_KEYS_SINGLE = ["project", "caravel_test", "module_test", "wrapper_proof", "openlane", "gds"]
@@ -42,8 +43,11 @@ class Project(object):
         if self.args.test_all or self.args.test_lvs:
             self.test_lvs()
 
-        if self.args.test_all or self.args.test_tristate:
-            self.test_tristate()
+        if self.args.test_all or self.args.test_tristate_num:
+            self.test_tristate_num()
+
+        if self.args.test_all or self.args.test_tristate_z:
+            self.test_tristate_z()
 
     def get_module_source_paths(self, absolute=True):
         paths = []
@@ -107,7 +111,7 @@ class Project(object):
         try_copy_tree(src, dst, self.args.force_delete)
 
         # set up env
-        test_env = os.environ
+        test_env = os.environ.copy()
         test_env["GCC_PATH"]    = self.system_config['env']['GCC_PATH']
         test_env["GCC_PREFIX"]  = self.system_config['env']['GCC_PREFIX']
         test_env["PDK_PATH"]    = self.system_config['env']['PDK_PATH']
@@ -166,7 +170,7 @@ class Project(object):
     # not a great test, as tristate could be in use elsewhere.
     # better to parse the cells and check outputs of the tristates are correct)
     # only valid if the LVS test passes
-    def test_tristate(self):
+    def test_tristate_num(self):
         conf = self.config["gds"]
         powered_v_filename = os.path.join(self.directory, conf["directory"], conf["lvs_filename"])
 
@@ -190,8 +194,13 @@ class Project(object):
         lvs_test_dir    = 'lvstest'
         try_mkdir(lvs_test_dir, self.args.force_delete)
 
+        # copy the gds and verilog to local directory
         gds_file        = os.path.abspath(os.path.join(self.directory, conf["directory"], conf["gds_filename"]))
         powered_verilog = os.path.abspath(os.path.join(self.directory, conf["directory"], conf["lvs_filename"]))
+        shutil.copyfile(gds_file, os.path.join(lvs_test_dir, conf["gds_filename"]))
+        shutil.copyfile(powered_verilog, os.path.join(lvs_test_dir, conf["lvs_filename"]))
+        gds_file = conf["gds_filename"]
+        powered_verilog = conf["lvs_filename"]
 
         # generated files
         ext_file        = module_name + ".ext"
@@ -207,7 +216,7 @@ class Project(object):
         logging.info("using PDK %s and OpenLANE %s" % (pdk_path, openlane_root))
 
         # env
-        test_env                       = os.environ
+        test_env                       = os.environ.copy()
         test_env["MAGIC_EXT_USE_GDS"]  = "1"
         test_env["PDKPATH"]            = pdk_path
 
@@ -266,3 +275,23 @@ class Project(object):
         else:
             logging.error(result.stdout)
             exit(1)
+
+    def test_tristate_z(self):
+        # env
+        test_env                       = os.environ.copy()
+        test_env["POWERED_VERILOG"]    = powered_verilog = os.path.abspath(os.path.join(self.directory, self.config["gds"]["directory"], self.config["gds"]["lvs_filename"]))
+        test_env["TOPLEVEL"]           = self.config["caravel_test"]["module_name"]
+
+        cmd = ["make", "clean", "test"]
+        cwd = "buffertest"
+
+        logging.info("attempting to run %s in %s" % (cmd, cwd))
+
+        # run makefile
+        try:
+            subprocess.run(cmd, cwd=cwd, env=test_env, check=True)
+        except subprocess.CalledProcessError as e:
+            logging.error(e)
+            exit(1)
+
+        logging.info("caravel test pass")
